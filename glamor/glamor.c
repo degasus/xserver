@@ -309,6 +309,10 @@ glamor_create_screen_resources(ScreenPtr screen)
     return ret;
 }
 
+#if 0
+#include "glamor_render_fallback.h"
+#endif
+
 /** Set up glamor for an already-configured GL context. */
 Bool
 glamor_init(ScreenPtr screen, unsigned int flags)
