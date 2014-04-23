@@ -92,6 +92,7 @@ glamor_put_image_bail(DrawablePtr drawable, GCPtr gc, int depth, int x, int y,
         glamor_prepare_access_gc(gc))
         fbPutImage(drawable, gc, depth, x, y, w, h, leftPad, format, bits);
     glamor_finish_access(drawable);
+    glamor_finish_access_gc(gc);
 }
 
 void
