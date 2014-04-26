@@ -653,6 +653,10 @@ miZeroPolyArc(DrawablePtr pDraw, GCPtr pGC, int narcs, xArc * parcs)
     int *widths = NULL;
     XID fgPixel = pGC->fgPixel;
     DashInfo dinfo;
+    Bool gather_points;
+    int mul_points;
+    DDXPointPtr points_base;
+    int *widths_base = NULL;
 
     for (arc = parcs, i = narcs; --i >= 0; arc++) {
         if (!miCanZeroArc(arc))
@@ -669,9 +673,17 @@ miZeroPolyArc(DrawablePtr pDraw, GCPtr pGC, int narcs, xArc * parcs)
     if (!maxPts)
         return;
     numPts = maxPts << 2;
+
+    gather_points = FALSE;
+    mul_points = 1;
+    if (pGC->lineStyle != LineDoubleDash) {
+        gather_points = TRUE;
+        mul_points = narcs;
+    }
+
     dospans = (pGC->fillStyle != FillSolid);
     if (dospans) {
-        widths = malloc(sizeof(int) * numPts);
+        widths_base = widths = malloc(sizeof(int) * numPts * mul_points);
         if (!widths)
             return;
         maxw = 0;
@@ -687,7 +699,7 @@ miZeroPolyArc(DrawablePtr pDraw, GCPtr pGC, int narcs, xArc * parcs)
                    (unsigned char *) pGC->dash, (int) pGC->numInDashList,
                    &dinfo.dashOffsetInit);
     }
-    points = malloc(sizeof(DDXPointRec) * numPts);
+    points_base = points = malloc(sizeof(DDXPointRec) * numPts * mul_points);
     if (!points) {
         if (dospans) {
             free(widths);
@@ -707,9 +719,12 @@ miZeroPolyArc(DrawablePtr pDraw, GCPtr pGC, int narcs, xArc * parcs)
                 dinfo.skipStart = TRUE;
             }
             n = pts - points;
-            if (!dospans)
-                (*pGC->ops->PolyPoint) (pDraw, pGC, CoordModeOrigin, n, points);
-            else {
+            if (!dospans) {
+                if (gather_points)
+                    points += n;
+                else
+                    (*pGC->ops->PolyPoint) (pDraw, pGC, CoordModeOrigin, n, points);
+            } else {
                 if (n > maxw) {
                     while (maxw < n)
                         widths[maxw++] = 1;
@@ -720,7 +735,11 @@ miZeroPolyArc(DrawablePtr pDraw, GCPtr pGC, int narcs, xArc * parcs)
                         pt->y += pDraw->y;
                     }
                 }
-                (*pGC->ops->FillSpans) (pDraw, pGC, n, points, widths, FALSE);
+                if (gather_points) {
+                    points += n;
+                    widths += n;
+                } else
+                    (*pGC->ops->FillSpans) (pDraw, pGC, n, points, widths, FALSE);
             }
             if (pGC->lineStyle != LineDoubleDash)
                 continue;
@@ -759,6 +778,15 @@ miZeroPolyArc(DrawablePtr pDraw, GCPtr pGC, int narcs, xArc * parcs)
                 ValidateGC(pDraw, pGC);
             }
         }
+    }
+    if (gather_points) {
+        if (!dospans)
+            (*pGC->ops->PolyPoint) (pDraw, pGC, CoordModeOrigin, points - points_base, points_base);
+        else {
+            (*pGC->ops->FillSpans) (pDraw, pGC, points - points_base, points_base, widths_base, FALSE);
+            widths = widths_base;
+        }
+        points = points_base;
     }
     free(points);
     if (dospans) {
