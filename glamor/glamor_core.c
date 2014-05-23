@@ -326,6 +326,8 @@ GCOps glamor_gc_ops = {
     .PushPixels = glamor_push_pixels,
 };
 
+static GCFuncs glamor_fixup_gc_funcs;
+
 /**
  * uxa_validate_gc() sets the ops to glamor's implementations, which may be
  * accelerated or may sync the card and fall back to fb.
@@ -341,6 +343,18 @@ glamor_validate_gc(GCPtr gc, unsigned long changes, DrawablePtr drawable)
     if ((changes & GCTile) && fbGetRotatedPixmap(gc)) {
         gc->pScreen->DestroyPixmap(fbGetRotatedPixmap(gc));
         fbGetRotatedPixmap(gc) = 0;
+    }
+
+    /* XXX kludge alert -- check to see if our destroy_gc is going to be called,
+     * if not, try to work around that
+     */
+    if (gc->funcs->DestroyGC != glamor_destroy_gc) {
+        ErrorF("Driver not using glamor_destroy_gc, working around that");
+        if (gc->funcs->DestroyGC != miDestroyGC)
+            ErrorF("Driver also not using miDestroyGC. This may well crash or leak memory.");
+        glamor_fixup_gc_funcs = *gc->funcs;
+        glamor_fixup_gc_funcs.DestroyGC = glamor_destroy_gc;
+        gc->funcs = &glamor_fixup_gc_funcs;
     }
 
     if (gc->fillStyle == FillTiled) {
