@@ -1729,9 +1729,12 @@ _glamor_composite(CARD8 op,
          dest->pDrawable->width, dest->pDrawable->height,
          glamor_get_picture_location(dest));
 
-    if (glamor_prepare_access_picture_box(dest, GLAMOR_ACCESS_RW, x_dest, y_dest, width, height) &&
-        glamor_prepare_access_picture_box(source, GLAMOR_ACCESS_RO, x_source, y_source, width, height) &&
-        glamor_prepare_access_picture_box(mask, GLAMOR_ACCESS_RO, x_mask, y_mask, width, height))
+    if (glamor_prepare_access_picture_box(dest, GLAMOR_ACCESS_RW,
+                                          x_dest, y_dest, width, height) &&
+        glamor_prepare_access_picture_box(source, GLAMOR_ACCESS_RO,
+                                          x_source, y_source, width, height) &&
+        glamor_prepare_access_picture_box(mask, GLAMOR_ACCESS_RO,
+                                          x_mask, y_mask, width, height))
     {
         fbComposite(op,
                     source, mask, dest,

@@ -90,9 +90,12 @@ glamor_prep_pixmap_box(PixmapPtr pixmap, glamor_access_t access, BoxPtr box)
                 gl_usage = GL_STREAM_READ;
 
             glBindBuffer(GL_PIXEL_PACK_BUFFER, priv->base.pbo);
-            glBufferData(GL_PIXEL_PACK_BUFFER, pixmap->devKind * pixmap->drawable.height, NULL, gl_usage);
+            glBufferData(GL_PIXEL_PACK_BUFFER,
+                         pixmap->devKind * pixmap->drawable.height, NULL,
+                         gl_usage);
         } else {
-            pixmap->devPrivate.ptr = malloc (pixmap->devKind * pixmap->drawable.height);
+            pixmap->devPrivate.ptr = malloc(pixmap->devKind *
+                                            pixmap->drawable.height);
             if (!pixmap->devPrivate.ptr)
                 return FALSE;
         }
@@ -142,19 +145,23 @@ glamor_fini_pixmap(PixmapPtr pixmap)
         pixmap->devPrivate.ptr = NULL;
     }
 
-    if (priv->base.map_access == GLAMOR_ACCESS_RW)
-        glamor_upload_boxes(pixmap, RegionRects(&priv->base.prepare_region), RegionNumRects(&priv->base.prepare_region),
+    if (priv->base.map_access == GLAMOR_ACCESS_RW) {
+        glamor_upload_boxes(pixmap,
+                            RegionRects(&priv->base.prepare_region),
+                            RegionNumRects(&priv->base.prepare_region),
                             0, 0, 0, 0, pixmap->devPrivate.ptr, pixmap->devKind);
+    }
 
     RegionUninit(&priv->base.prepare_region);
 
     if (glamor_priv->has_rw_pbo) {
         glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
         glDeleteBuffers(1, &priv->base.pbo);
+        priv->base.pbo = 0;
     } else {
-        free (pixmap->devPrivate.ptr);
-        pixmap->devPrivate.ptr = NULL;
+        free(pixmap->devPrivate.ptr);
     }
+    pixmap->devPrivate.ptr = NULL;
 
     priv->base.prepared = FALSE;
 }
@@ -240,7 +247,8 @@ glamor_prepare_access_gc(GCPtr gc)
 {
     switch (gc->fillStyle) {
     case FillTiled:
-        return glamor_prepare_access(&gc->tile.pixmap->drawable, GLAMOR_ACCESS_RO);
+        return glamor_prepare_access(&gc->tile.pixmap->drawable,
+                                     GLAMOR_ACCESS_RO);
     case FillStippled:
     case FillOpaqueStippled:
         return glamor_prepare_access(&gc->stipple->drawable, GLAMOR_ACCESS_RO);
