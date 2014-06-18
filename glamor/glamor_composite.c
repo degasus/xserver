@@ -326,24 +326,64 @@ glamor_composite_set_blend_state(ScreenPtr screen,
 
     switch(op) {
         case PictOpClear:
+        case PictOpDisjointClear:
+        case PictOpConjointClear:
             src = GL_ZERO;
             dst = GL_ZERO;
             break;
         case PictOpSrc:
+        case PictOpDisjointSrc:
+        case PictOpConjointSrc:
             src = GL_ONE;
             dst = GL_ZERO;
             break;
         case PictOpDst:
+        case PictOpDisjointDst:
+        case PictOpConjointDst:
             src = GL_ZERO;
             dst = GL_ONE;
             break;
         case PictOpOver:
             src = GL_ONE;
-            if (state->mask.mask_rgba)
-                dst = GL_ONE_MINUS_SRC1_COLOR;
-            else
-                dst = GL_ONE_MINUS_SRC_ALPHA;
+            dst = state->mask.mask_rgba ? GL_ONE_MINUS_SRC1_COLOR : GL_ONE_MINUS_SRC_ALPHA;
             break;
+        case PictOpOverReverse:
+            src = GL_ONE_MINUS_DST_ALPHA;
+            dst = GL_ONE;
+            break;
+        case PictOpIn:
+            src = GL_DST_ALPHA;
+            dst = GL_ZERO;
+            break;
+        case PictOpInReverse:
+            src = GL_ZERO;
+            dst = state->mask.mask_rgba ? GL_SRC1_COLOR : GL_SRC_ALPHA;
+            break;
+        case PictOpOut:
+            src = GL_ONE_MINUS_DST_ALPHA;
+            dst = GL_ZERO;
+            break;
+        case PictOpOutReverse:
+            src = GL_ZERO;
+            dst = state->mask.mask_rgba ? GL_ONE_MINUS_SRC1_COLOR : GL_ONE_MINUS_SRC_ALPHA;
+            break;
+        case PictOpAtop:
+            src = GL_DST_ALPHA;
+            dst = state->mask.mask_rgba ? GL_ONE_MINUS_SRC1_COLOR : GL_ONE_MINUS_SRC_ALPHA;
+            break;
+        case PictOpAtopReverse:
+            src = GL_ONE_MINUS_DST_ALPHA;
+            dst = state->mask.mask_rgba ? GL_SRC1_COLOR : GL_SRC_ALPHA;
+            break;
+        case PictOpXor:
+            src = GL_ONE_MINUS_DST_ALPHA;
+            dst = state->mask.mask_rgba ? GL_ONE_MINUS_SRC1_COLOR : GL_ONE_MINUS_SRC_ALPHA;
+            break;
+        case PictOpAdd:
+            src = GL_ONE;
+            dst = GL_ONE;
+            break;
+
         default:
             src = GL_ONE;
             dst = GL_ZERO;
