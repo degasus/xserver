@@ -33,10 +33,13 @@
 #include <sys/stat.h>
 #endif
 
+static const int SAMPLER_SOURCE = 0;
+static const int SAMPLER_MASK = 1;
+
 static Bool
 glamor_composite_verify_picture(PicturePtr pic,
                                 glamor_composite_state_image* state,
-                                Bool upload, Bool readonly)
+                                Bool destination)
 {
     Bool ret = TRUE;
     state->pixmap = NULL;
@@ -46,11 +49,13 @@ glamor_composite_verify_picture(PicturePtr pic,
     state->upload = GLAMOR_NONE;
     state->repeat = RepeatNone;
 
-    if(!pic) { // input not available
+    // input not available
+    if(!pic) {
         state->state = STATE_NONE;
-        ret = readonly;
+        ret = !destination;
 
-    } else if(!pic->pDrawable) { // filled
+    // filled
+    } else if(!pic->pDrawable) {
         switch(pic->pSourcePict->type) {
             case SourcePictTypeSolidFill:
                 state->state = STATE_FILL_CONST;
@@ -58,7 +63,7 @@ glamor_composite_verify_picture(PicturePtr pic,
                     (pic->pSourcePict->solidFill.color,
                      &state->color[0], &state->color[1],
                      &state->color[2], &state->color[3], PICT_a8r8g8b8);
-                ret = readonly;
+                ret = !destination;
                 break;
             default:
                 ErrorF("TODO: XRender fallback because of not implemented fill style %d\n", pic->pSourcePict->type);
@@ -66,7 +71,8 @@ glamor_composite_verify_picture(PicturePtr pic,
                 break;
         }
 
-    } else { // common texture
+    // common texture
+    } else {
         state->state = STATE_TEX;
         state->pixmap = glamor_get_drawable_pixmap(pic->pDrawable);
         state->priv = glamor_get_pixmap_private(state->pixmap);
@@ -74,7 +80,7 @@ glamor_composite_verify_picture(PicturePtr pic,
         state->mask_rgba = !!pic->componentAlpha;
         state->repeat = pic->repeatType;
 
-        if (state->priv->base.gl_fbo == GLAMOR_FBO_UNATTACHED && upload) {
+        if (state->priv->base.gl_fbo == GLAMOR_FBO_UNATTACHED && !destination) {
             state->upload = GLAMOR_UPLOAD_PENDING;
         } else if (!GLAMOR_PIXMAP_PRIV_HAS_FBO((state->priv))) {
             ErrorF("XRender fallback because of not reachable pixmap of type %d\n", state->priv->base.gl_fbo);
@@ -118,7 +124,7 @@ glamor_composite_bind_program(ScreenPtr screen)
 
         "uniform vec4 mask_transform;\n"
 
-        "#define TRANS(x, t) (((x) - t.xy) * t.zw)\n"
+        "vec2 TRANS(vec2 x, vec4 t) { return x * t.xy + t.zw; }\n"
 
         "void main() {\n"
         "   gl_Position = vec4(TRANS(position, dest_transform) * 2.0 - 1.0, 0.0, 1.0);\n"
@@ -158,6 +164,8 @@ glamor_composite_bind_program(ScreenPtr screen)
         "   return v.x >= 0.0 && v.x <= 1.0 && v.y >= 0.0 && v.y <= 1.0;\n"
         "}\n"
 
+        "vec2 TRANS(vec2 x, vec4 t) { return x * t.xy + t.zw; }\n"
+
         "vec4 mysampler(int state, sampler2D sampler, vec2 position, vec4 color, int has_alpha, int repeat, vec4 textransform) {\n"
         "   vec4 c;\n"
         "   switch(state) {\n"
@@ -183,7 +191,7 @@ glamor_composite_bind_program(ScreenPtr screen)
         "           }\n"
 
                     // transform to texture coords
-        "           position = position * textransform.xy + textransform.zw;\n"
+        "           position = TRANS(position, textransform);\n"
 
                     // discard if our of texture (only happens with large textures)
         "           if(!clamped(position)) discard;\n"
@@ -213,7 +221,7 @@ glamor_composite_bind_program(ScreenPtr screen)
     glamor_link_glsl_prog(screen, prog, "composite");
 
 
-
+    // fetch uniform positions
 #define GET_POS(a) glamor_priv->composite.source.a ## _pos = glGetUniformLocation(prog, "source_" #a); \
                    glamor_priv->composite.mask.a   ## _pos = glGetUniformLocation(prog, "mask_"   #a)
     GET_POS(sampler);
@@ -224,15 +232,15 @@ glamor_composite_bind_program(ScreenPtr screen)
     GET_POS(repeat);
     GET_POS(textransform);
 #undef GET_POS
-
 #define GET_POS(a) glamor_priv->composite.a ## _pos = glGetUniformLocation(prog, #a)
     GET_POS(dest_transform);
     GET_POS(rgba_mask);
 #undef GET_POS
 
+    // bind sampler
     glUseProgram(prog);
-    glUniform1i(glamor_priv->composite.source.sampler_pos, 0);
-    glUniform1i(glamor_priv->composite.mask.sampler_pos, 1);
+    glUniform1i(glamor_priv->composite.source.sampler_pos, SAMPLER_SOURCE);
+    glUniform1i(glamor_priv->composite.mask.sampler_pos, SAMPLER_MASK);
 
     glamor_priv->composite.program = prog;
     return TRUE;
@@ -245,8 +253,7 @@ glamor_composite_set_textures(ScreenPtr screen,
                               int binding_point,
                               int box_x, int box_y,
                               int offset_x, int offset_y,
-                              PicturePtr pic
-                             )
+                              PicturePtr pic)
 {
     BoxPtr box;
     glamor_pixmap_fbo* tex;
@@ -259,13 +266,20 @@ glamor_composite_set_textures(ScreenPtr screen,
             glActiveTexture(GL_TEXTURE0 + binding_point);
             glBindTexture(GL_TEXTURE_2D, tex->tex);
             box = glamor_pixmap_box_at(state->priv, box_x, box_y);
+
+            // transformation from pixels to drawable coords
             glUniform4f(priv->transform_pos,
-                -offset_x, -offset_y, 1.0f / pic->pDrawable->width, 1.0f / pic->pDrawable->height);
+                1.0f / pic->pDrawable->width,
+                1.0f / pic->pDrawable->height,
+                (float)offset_x / pic->pDrawable->width,
+                (float)offset_y / pic->pDrawable->height);
+
+            // transformation from drawable coords to texture coords
             glUniform4f(priv->textransform_pos,
-                1.0f * pic->pDrawable->width / (box->x2 - box->x1),
-                1.0f * pic->pDrawable->height / (box->y2 - box->y1),
-                -1.0f * (box->x1 - pic->pDrawable->x) / (box->x2 - box->x1),
-                -1.0f * (box->y1 - pic->pDrawable->y) / (box->y2 - box->y1)
+                (float)pic->pDrawable->width / (box->x2 - box->x1),
+                (float)pic->pDrawable->height / (box->y2 - box->y1),
+                -(float)(box->x1 - pic->pDrawable->x) / (box->x2 - box->x1),
+                -(float)(box->y1 - pic->pDrawable->y) / (box->y2 - box->y1)
             );
             glUniform1i(priv->has_alpha_pos, state->has_alpha);
             glUniform1i(priv->repeat_pos, state->repeat);
@@ -292,9 +306,13 @@ glamor_composite_bind_fbo(ScreenPtr screen,
         glamor_pixmap_fbo_at(state->priv, box_x, box_y),
         0, 0, box->x2 - box->x1, box->y2 - box->y1);
 
+    // transformation from pixels to texture coords
+    // drawable coords aren't needed for the dest
     glUniform4f(glamor_priv->composite.dest_transform_pos,
-                box->x1 - pic->pDrawable->x, box->y1 - pic->pDrawable->y,
-                1.0f / (box->x2 - box->x1), 1.0f / (box->y2 - box->y1));
+                1.0f / (box->x2 - box->x1),
+                1.0f / (box->y2 - box->y1),
+                -(float)(box->x1 - pic->pDrawable->x) / (box->x2 - box->x1),
+                -(float)(box->y1 - pic->pDrawable->y) / (box->y2 - box->y1));
 }
 
 static Bool
@@ -363,19 +381,29 @@ glamor_composite_gl(CARD8 op,
     int nbox, i;
     Bool ret = FALSE;
 
-    if (!glamor_composite_verify_picture(source, &state.source, TRUE,  TRUE ) ||
-        !glamor_composite_verify_picture(mask,   &state.mask,   TRUE,  TRUE ) ||
-        !glamor_composite_verify_picture(dest,   &state.dest,   FALSE, FALSE))
+    // validates the pictures and parse the useful bits
+    if (!glamor_composite_verify_picture(source, &state.source, FALSE) ||
+        !glamor_composite_verify_picture(mask,   &state.mask,   FALSE) ||
+        !glamor_composite_verify_picture(dest,   &state.dest,   TRUE ))
     {
         // dest pixmap is unavailable for the gpu, so we have to fallback
         return FALSE;
     }
 
+    // Fallbacks which could be avoided
     if (state.dest.pixmap == state.source.pixmap || state.dest.pixmap == state.mask.pixmap) {
         ErrorF("TODO: XRender fallback because of maybe overlapping textures, make a copy\n");
         return FALSE;
     }
+    if (state.source.upload == GLAMOR_UPLOAD_PENDING &&
+        state.mask.upload == GLAMOR_UPLOAD_PENDING &&
+        state.source.pixmap == state.mask.pixmap)
+    {
+        ErrorF("TODO: XRender fallback because of uploading a texture twice, care about format + drawable rect\n");
+        return FALSE;
+    }
 
+    // apply clipping and generate a Region for the not-clipped-area
     if (!miComputeCompositeRegion(&region,
                                   source, mask, dest,
                                   x_source, y_source,
@@ -388,11 +416,10 @@ glamor_composite_gl(CARD8 op,
     nbox = RegionNumRects(&region);
     box = RegionRects(&region);
 
-    screen = dest->pDrawable->pScreen;
-    glamor_priv = glamor_get_screen_private(screen);
-
     /* reset the state after here */
 
+    screen = dest->pDrawable->pScreen;
+    glamor_priv = glamor_get_screen_private(screen);
     glamor_make_current(glamor_priv);
 
     // upload pixmaps which are in memory
@@ -403,16 +430,19 @@ glamor_composite_gl(CARD8 op,
         if((state.mask.upload = glamor_upload_picture_to_texture(mask)) != GLAMOR_UPLOAD_DONE)
             goto bail;
 
+    // apply blending state
     if (!glamor_composite_set_blend_state(screen, op, &state)) {
         // unsupported blending op.
         goto bail;
     }
 
+    // compile + bind program. TODO: split up the program in smaller ones
     if (!glamor_composite_bind_program(screen)) {
         ErrorF("XRender fallback because of broken shader.\n");
         goto bail;
     }
 
+    // Upload dest rect as vertices
     vertices = glamor_get_vbo_space(screen, nbox * 8 * sizeof(GLshort), &vbo_offset);
     glEnableVertexAttribArray(GLAMOR_VERTEX_POS);
     glVertexAttribPointer(GLAMOR_VERTEX_POS, 2, GL_SHORT, GL_FALSE, 0, vbo_offset);
@@ -427,24 +457,25 @@ glamor_composite_gl(CARD8 op,
 
     glUniform1i(glamor_priv->composite.rgba_mask_pos, state.mask.mask_rgba);
 
-    // This function will also iterate over nullptr, so we don't have to check if this images exist
+    // Iterate over _all_ combinations of source, mask and dest textures.
+    // This will be slow as hell for huge large_textures
+    // TODO: skip textures which can't overlap. Keep care about transformation and repeating
+    // Note: This function will also iterate over nullptr, so we don't have to check if this images exist
     glamor_pixmap_loop(state.dest.priv, dst_box_x, dst_box_y) {
 
         glamor_composite_bind_fbo(screen, &state.dest, dst_box_x, dst_box_y, dest);
 
         glamor_pixmap_loop(state.source.priv, src_box_x, src_box_y) {
 
-            glamor_composite_set_textures(screen, &state.source, &glamor_priv->composite.source, 0,
-                                          src_box_x, src_box_y,
-                                          x_source - x_dest, y_source - y_dest, source
-                                         );
+            glamor_composite_set_textures(screen, &state.source, &glamor_priv->composite.source,
+                                          SAMPLER_SOURCE, src_box_x, src_box_y,
+                                          x_source - x_dest, y_source - y_dest, source);
 
             glamor_pixmap_loop(state.mask.priv, mask_box_x, mask_box_y) {
 
-                glamor_composite_set_textures(screen, &state.mask, &glamor_priv->composite.mask, 1,
-                                              mask_box_x, mask_box_y,
-                                              x_mask - x_dest, y_mask - y_dest, mask
-                                             );
+                glamor_composite_set_textures(screen, &state.mask, &glamor_priv->composite.mask,
+                                              SAMPLER_MASK, mask_box_x, mask_box_y,
+                                              x_mask - x_dest, y_mask - y_dest, mask);
 
                 glDrawArrays(GL_QUADS, 0, 4 * nbox);
             }
@@ -454,6 +485,7 @@ glamor_composite_gl(CARD8 op,
 bail:
     glDisable(GL_BLEND);
     glDisableVertexAttribArray(GLAMOR_VERTEX_POS);
+    RegionUninit(&region);
     return ret;
 }
 
