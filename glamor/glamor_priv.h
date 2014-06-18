@@ -206,6 +206,8 @@ typedef struct glamor_composite_private_image {
     GLint color_pos;
     GLint transform_pos;
     GLint has_alpha_pos;
+    GLint repeat_pos;
+    GLint textransform_pos;
 } glamor_composite_private_image;
 
 typedef struct glamor_composite_private {
@@ -224,8 +226,8 @@ typedef struct glamor_composite_state_image {
     int chan_available;
     Bool has_alpha;
     Bool mask_rgba;
-    Bool clip;
     int upload;
+    int repeat;
     enum {
         STATE_NONE,
         STATE_TEX,

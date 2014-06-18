@@ -42,9 +42,9 @@ glamor_composite_verify_picture(PicturePtr pic,
     state->pixmap = NULL;
     state->priv = NULL;
     state->has_alpha = TRUE;
-    state->clip = FALSE;
     state->mask_rgba = FALSE;
     state->upload = GLAMOR_NONE;
+    state->repeat = RepeatNone;
 
     if(!pic) { // input not available
         state->state = STATE_NONE;
@@ -72,9 +72,7 @@ glamor_composite_verify_picture(PicturePtr pic,
         state->priv = glamor_get_pixmap_private(state->pixmap);
         state->has_alpha = !!PICT_FORMAT_A(pic->format);
         state->mask_rgba = !!pic->componentAlpha;
-        state->clip = pic->pDrawable->x || pic->pDrawable->y ||
-                      pic->pDrawable->width != state->priv->base.box.x2 - state->priv->base.box.x1 ||
-                      pic->pDrawable->height != state->priv->base.box.y2 - state->priv->base.box.y1;
+        state->repeat = pic->repeatType;
 
         if (state->priv->base.gl_fbo == GLAMOR_FBO_UNATTACHED && upload) {
             state->upload = GLAMOR_UPLOAD_PENDING;
@@ -83,20 +81,8 @@ glamor_composite_verify_picture(PicturePtr pic,
             return FALSE;
         }
 
-        if (state->priv->type == GLAMOR_TEXTURE_LARGE) {
-            ErrorF("TODO: XRender fallback because of missing scissior check\n");
-            return FALSE;
-        }
         if (pic->alphaMap) {
             ErrorF("TODO: XRender fallback because of alpha map\n");
-            return FALSE;
-        }
-        if (pic->repeat && pic->repeatType != RepeatNormal) {
-            ErrorF("TODO: XRender fallback because of repeat type %d\n", pic->repeatType);
-            return FALSE;
-        }
-        if (state->clip && pic->repeat) {
-            ErrorF("TODO: XRender fallback because of clipping and repeating, use software sampler\n");
             return FALSE;
         }
         if (pic->transform) {
@@ -153,19 +139,35 @@ glamor_composite_bind_program(ScreenPtr screen)
         "uniform int source_state;\n"
         "uniform vec4 source_color;\n"
         "uniform int source_has_alpha;\n"
+        "uniform int source_repeat;\n"
+        "uniform vec4 source_textransform;\n"
 
         "uniform sampler2D mask_sampler;\n"
         "uniform int mask_state;\n"
         "uniform vec4 mask_color;\n"
         "uniform int mask_has_alpha;\n"
+        "uniform int mask_repeat;\n"
+        "uniform vec4 mask_textransform;\n"
 
         "uniform int rgba_mask;\n"
 
-        "vec4 mysampler(int state, sampler2D sampler, vec2 position, vec4 color, int has_alpha) {\n"
+        "bool clamped(vec2 v) {\n"
+        "   return v.x >= 0.0 && v.x <= 1.0 && v.y >= 0.0 && v.y <= 1.0;\n"
+        "}\n"
+
+        "vec4 mysampler(int state, sampler2D sampler, vec2 position, vec4 color, int has_alpha, int repeat, vec4 textransform) {\n"
         "   vec4 c;\n"
         "   switch(state) {\n"
         "       case 0: return vec4(1.0, 1.0, 1.0, 1.0);\n"
         "       case 1:\n"
+        "           switch(repeat) {\n"
+        "               case 0: if(!clamped(position)) return vec4(0.0);\n"
+        "               case 1: position = fract(position); break;\n"
+        "               case 2: position = clamp(position, 0.0, 1.0); break;\n"
+        "               case 3: position = 1.0 - abs(fract(position * 0.5) * 2.0 - 1.0); break;\n"
+        "           }\n"
+        "           position = position * textransform.xy + textransform.zw;\n"
+        "           if(!clamped(position)) discard;\n"
         "           c = texture2D(sampler, position);\n"
         "           return vec4(c.rgb, has_alpha == 1 ? c.a : 1.0);\n"
         "       case 2: return color;\n"
@@ -174,8 +176,8 @@ glamor_composite_bind_program(ScreenPtr screen)
         "}\n"
 
         "void main() {\n"
-        "   vec4 source = mysampler(source_state, source_sampler, source_position, source_color, source_has_alpha);\n"
-        "   vec4 mask = mysampler(mask_state, mask_sampler, mask_position, mask_color, mask_has_alpha);\n"
+        "   vec4 source = mysampler(source_state, source_sampler, source_position, source_color, source_has_alpha, source_repeat, source_textransform);\n"
+        "   vec4 mask = mysampler(mask_state, mask_sampler, mask_position, mask_color, mask_has_alpha, mask_repeat, mask_textransform);\n"
 
         "   out_color = source * ( rgba_mask == 1 ? mask : vec4(mask.a) );\n"
         "   out_alpha = source.a * mask;\n"
@@ -189,18 +191,17 @@ glamor_composite_bind_program(ScreenPtr screen)
     glBindFragDataLocationIndexed(prog, 0, 1, "out_alpha");
     glamor_link_glsl_prog(screen, prog, "composite");
 
-#define GET_POS(a, b) glamor_priv->composite.a.b ## _pos = glGetUniformLocation(prog, #a "_" #b)
-    GET_POS(source, sampler);
-    GET_POS(source, state);
-    GET_POS(source, color);
-    GET_POS(source, transform);
-    GET_POS(source, has_alpha);
 
-    GET_POS(mask, sampler);
-    GET_POS(mask, state);
-    GET_POS(mask, color);
-    GET_POS(mask, transform);
-    GET_POS(mask, has_alpha);
+
+#define GET_POS(a) glamor_priv->composite.source.a ## _pos = glGetUniformLocation(prog, "source_" #a); \
+                   glamor_priv->composite.mask.a   ## _pos = glGetUniformLocation(prog, "mask_"   #a)
+    GET_POS(sampler);
+    GET_POS(state);
+    GET_POS(color);
+    GET_POS(transform);
+    GET_POS(has_alpha);
+    GET_POS(repeat);
+    GET_POS(textransform);
 #undef GET_POS
 
 #define GET_POS(a) glamor_priv->composite.a ## _pos = glGetUniformLocation(prog, #a)
@@ -229,7 +230,6 @@ glamor_composite_set_textures(ScreenPtr screen,
     BoxPtr box;
     glamor_pixmap_fbo* tex;
     glUniform1i(priv->state_pos, state->state);
-    glUniform1i(priv->has_alpha_pos, state->has_alpha);
 
     switch(state->state) {
         case STATE_TEX:
@@ -239,8 +239,15 @@ glamor_composite_set_textures(ScreenPtr screen,
             glBindTexture(GL_TEXTURE_2D, tex->tex);
             box = glamor_pixmap_box_at(state->priv, box_x, box_y);
             glUniform4f(priv->transform_pos,
-                box->x1 - offset_x - pic->pDrawable->x, box->y1 - offset_y - pic->pDrawable->y,
-                1.0f / (box->x2 - box->x1), 1.0f / (box->y2 - box->y1));
+                -offset_x, -offset_y, 1.0f / pic->pDrawable->width, 1.0f / pic->pDrawable->height);
+            glUniform4f(priv->textransform_pos,
+                1.0f * pic->pDrawable->width / (box->x2 - box->x1),
+                1.0f * pic->pDrawable->height / (box->y2 - box->y1),
+                -1.0f * (box->x1 - pic->pDrawable->x) / (box->x2 - box->x1),
+                -1.0f * (box->y1 - pic->pDrawable->y) / (box->y2 - box->y1)
+            );
+            glUniform1i(priv->has_alpha_pos, state->has_alpha);
+            glUniform1i(priv->repeat_pos, state->repeat);
             break;
 
         case STATE_FILL_CONST:
