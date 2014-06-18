@@ -198,6 +198,44 @@ struct glamor_saved_procs {
 #define BLIT_STATE 2
 #define RENDER_IDEL_MAX 32
 
+
+typedef struct glamor_composite_private_image {
+    GLint offset_pos;
+    GLint sampler_pos;
+    GLint state_pos;
+    GLint color_pos;
+    GLint transform_pos;
+    GLint has_alpha_pos;
+} glamor_composite_private_image;
+
+typedef struct glamor_composite_private {
+    GLuint program;
+
+    GLint dest_transform_pos;
+    GLint rgba_mask_pos;
+    glamor_composite_private_image source;
+    glamor_composite_private_image mask;
+} glamor_composite_private;
+
+typedef struct glamor_composite_state_image {
+    PixmapPtr pixmap;
+    struct glamor_pixmap_private* priv;
+    float color[4];
+    int chan_available;
+    Bool has_alpha;
+    Bool mask_rgba;
+    Bool clip;
+    enum {
+        STATE_NONE,
+        STATE_TEX,
+        STATE_FILL_CONST,
+    } state;
+} glamor_composite_state_image;
+
+typedef struct glamor_composite_state {
+    glamor_composite_state_image source, mask, dest;
+} glamor_composite_state;
+
 typedef struct glamor_screen_private {
     Bool yInverted;
     unsigned int tick;
@@ -297,6 +335,8 @@ typedef struct glamor_screen_private {
     GLint xv_prog;
 
     struct glamor_context ctx;
+
+    glamor_composite_private composite;
 } glamor_screen_private;
 
 typedef enum glamor_access {
@@ -522,7 +562,7 @@ glamor_pixmap_box_at(glamor_pixmap_private *priv, int x, int y)
 static inline int
 glamor_pixmap_wcnt(glamor_pixmap_private *priv)
 {
-    if (priv->type == GLAMOR_TEXTURE_LARGE)
+    if (priv != NULL && priv->type == GLAMOR_TEXTURE_LARGE)
         return priv->large.block_wcnt;
     return 1;
 }
@@ -530,7 +570,7 @@ glamor_pixmap_wcnt(glamor_pixmap_private *priv)
 static inline int
 glamor_pixmap_hcnt(glamor_pixmap_private *priv)
 {
-    if (priv->type == GLAMOR_TEXTURE_LARGE)
+    if (priv != NULL && priv->type == GLAMOR_TEXTURE_LARGE)
         return priv->large.block_hcnt;
     return 1;
 }

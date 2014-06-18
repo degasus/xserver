@@ -1750,7 +1750,7 @@ _glamor_composite(CARD8 op,
 }
 
 void
-glamor_composite(CARD8 op,
+glamor_composite_old(CARD8 op,
                  PicturePtr source,
                  PicturePtr mask,
                  PicturePtr dest,
@@ -1765,7 +1765,7 @@ glamor_composite(CARD8 op,
 }
 
 Bool
-glamor_composite_nf(CARD8 op,
+glamor_composite_nf_old(CARD8 op,
                     PicturePtr source,
                     PicturePtr mask,
                     PicturePtr dest,

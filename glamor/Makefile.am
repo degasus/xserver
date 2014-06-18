@@ -6,6 +6,7 @@ AM_CFLAGS = $(CWARNFLAGS) $(DIX_CFLAGS) $(GLAMOR_CFLAGS)
 
 libglamor_la_SOURCES = \
 	glamor.c \
+	glamor_composite.c \
 	glamor_context.h \
 	glamor_copy.c \
 	glamor_core.c \
