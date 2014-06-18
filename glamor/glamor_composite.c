@@ -122,6 +122,8 @@ glamor_composite_bind_program(ScreenPtr screen)
 
         "void main() {\n"
         "   gl_Position = vec4(TRANS(position, dest_transform) * 2.0 - 1.0, 0.0, 1.0);\n"
+
+            // transform to drawable coords, not to texture ones
         "   source_position = TRANS(position, source_transform);\n"
         "   mask_position = TRANS(position, mask_transform);\n"
         "}\n"
@@ -151,6 +153,7 @@ glamor_composite_bind_program(ScreenPtr screen)
 
         "uniform int rgba_mask;\n"
 
+        // return true if 0 < v < 1
         "bool clamped(vec2 v) {\n"
         "   return v.x >= 0.0 && v.x <= 1.0 && v.y >= 0.0 && v.y <= 1.0;\n"
         "}\n"
@@ -158,18 +161,36 @@ glamor_composite_bind_program(ScreenPtr screen)
         "vec4 mysampler(int state, sampler2D sampler, vec2 position, vec4 color, int has_alpha, int repeat, vec4 textransform) {\n"
         "   vec4 c;\n"
         "   switch(state) {\n"
+
+                // not available
         "       case 0: return vec4(1.0, 1.0, 1.0, 1.0);\n"
+
+                // common texture
         "       case 1:\n"
         "           switch(repeat) {\n"
+
+                        // repeat none: transparent if our of image
         "               case 0: if(!clamped(position)) return vec4(0.0);\n"
+
+                        // repeat normal
         "               case 1: position = fract(position); break;\n"
+
+                        // repeat pad: use the border color
         "               case 2: position = clamp(position, 0.0, 1.0); break;\n"
+
+                        // repeat reflect
         "               case 3: position = 1.0 - abs(fract(position * 0.5) * 2.0 - 1.0); break;\n"
         "           }\n"
+
+                    // transform to texture coords
         "           position = position * textransform.xy + textransform.zw;\n"
+
+                    // discard if our of texture (only happens with large textures)
         "           if(!clamped(position)) discard;\n"
         "           c = texture2D(sampler, position);\n"
         "           return vec4(c.rgb, has_alpha == 1 ? c.a : 1.0);\n"
+
+                // const color
         "       case 2: return color;\n"
         "   }\n"
         "   return vec4(1.0, 1.0, 1.0, 1.0);\n"
