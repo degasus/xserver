@@ -225,6 +225,7 @@ typedef struct glamor_composite_state_image {
     Bool has_alpha;
     Bool mask_rgba;
     Bool clip;
+    int upload;
     enum {
         STATE_NONE,
         STATE_TEX,

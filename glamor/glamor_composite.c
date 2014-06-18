@@ -30,6 +30,7 @@
 #ifdef RENDER
 #include "mipict.h"
 #include "fbpict.h"
+#include <sys/stat.h>
 #endif
 
 static Bool
@@ -43,6 +44,7 @@ glamor_composite_verify_picture(PicturePtr pic,
     state->has_alpha = TRUE;
     state->clip = FALSE;
     state->mask_rgba = FALSE;
+    state->upload = GLAMOR_NONE;
 
     if(!pic) { // input not available
         state->state = STATE_NONE;
@@ -74,6 +76,13 @@ glamor_composite_verify_picture(PicturePtr pic,
                       pic->pDrawable->width != state->priv->base.box.x2 - state->priv->base.box.x1 ||
                       pic->pDrawable->height != state->priv->base.box.y2 - state->priv->base.box.y1;
 
+        if (state->priv->base.gl_fbo == GLAMOR_FBO_UNATTACHED && upload) {
+            state->upload = GLAMOR_UPLOAD_PENDING;
+        } else if (!GLAMOR_PIXMAP_PRIV_HAS_FBO((state->priv))) {
+            ErrorF("XRender fallback because of not reachable pixmap of type %d\n", state->priv->base.gl_fbo);
+            return FALSE;
+        }
+
         if (state->priv->type == GLAMOR_TEXTURE_LARGE) {
             ErrorF("TODO: XRender fallback because of missing scissior check\n");
             return FALSE;
@@ -93,10 +102,6 @@ glamor_composite_verify_picture(PicturePtr pic,
         if (pic->transform) {
             ErrorF("TODO: XRender fallback because of image transform, keep care about filtering\n");
             return FALSE;
-        }
-        if (!GLAMOR_PIXMAP_PRIV_HAS_FBO((state->priv))) {
-            ErrorF("TODO: XRender fallback because of missing upload\n");
-            ret = FALSE; // upload
         }
     }
     return ret;
@@ -361,6 +366,14 @@ glamor_composite_gl(CARD8 op,
     /* reset the state after here */
 
     glamor_make_current(glamor_priv);
+
+    // upload pixmaps which are in memory
+    if (state.source.upload == GLAMOR_UPLOAD_PENDING)
+        if((state.source.upload = glamor_upload_picture_to_texture(source)) != GLAMOR_UPLOAD_DONE)
+            goto bail;
+    if (state.mask.upload == GLAMOR_UPLOAD_PENDING)
+        if((state.mask.upload = glamor_upload_picture_to_texture(mask)) != GLAMOR_UPLOAD_DONE)
+            goto bail;
 
     if (!glamor_composite_set_blend_state(screen, op, &state)) {
         // unsupported blending op.
