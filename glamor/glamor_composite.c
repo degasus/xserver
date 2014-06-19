@@ -80,9 +80,7 @@ glamor_composite_verify_picture(PicturePtr pic,
         state->repeat = pic->repeatType;
         state->transform = !!pic->transform;
 
-        if (state->priv->base.gl_fbo == GLAMOR_FBO_UNATTACHED && !destination) {
-            state->upload = GLAMOR_UPLOAD_PENDING;
-        } else if (!GLAMOR_PIXMAP_PRIV_HAS_FBO((state->priv))) {
+        if (!GLAMOR_PIXMAP_PRIV_HAS_FBO(state->priv)) {
             ErrorF("XRender fallback because of not reachable pixmap of type %d\n", state->priv->base.gl_fbo);
             return FALSE;
         }
@@ -465,13 +463,6 @@ glamor_composite_gl(CARD8 op,
         ErrorF("TODO: XRender fallback because of maybe overlapping textures, make a copy\n");
         return FALSE;
     }
-    if (state.source.upload == GLAMOR_UPLOAD_PENDING &&
-        state.mask.upload == GLAMOR_UPLOAD_PENDING &&
-        state.source.pixmap == state.mask.pixmap)
-    {
-        ErrorF("TODO: XRender fallback because of uploading a texture twice, care about format + drawable rect\n");
-        return FALSE;
-    }
 
     // apply clipping and generate a Region for the not-clipped-area
     if (!miComputeCompositeRegion(&region,
@@ -491,14 +482,6 @@ glamor_composite_gl(CARD8 op,
     screen = dest->pDrawable->pScreen;
     glamor_priv = glamor_get_screen_private(screen);
     glamor_make_current(glamor_priv);
-
-    // upload pixmaps which are in memory
-    if (state.source.upload == GLAMOR_UPLOAD_PENDING)
-        if((state.source.upload = glamor_upload_picture_to_texture(source)) != GLAMOR_UPLOAD_DONE)
-            goto bail;
-    if (state.mask.upload == GLAMOR_UPLOAD_PENDING)
-        if((state.mask.upload = glamor_upload_picture_to_texture(mask)) != GLAMOR_UPLOAD_DONE)
-            goto bail;
 
     // apply blending state
     if (!glamor_composite_set_blend_state(screen, op, &state)) {
