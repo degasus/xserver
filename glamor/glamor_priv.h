@@ -200,14 +200,14 @@ struct glamor_saved_procs {
 
 
 typedef struct glamor_composite_private_image {
-    GLint offset_pos;
     GLint sampler_pos;
     GLint state_pos;
     GLint color_pos;
     GLint transform_pos;
-    GLint has_alpha_pos;
     GLint repeat_pos;
     GLint textransform_pos;
+    GLint matrix_pos;
+    GLint offset_pos;
 } glamor_composite_private_image;
 
 typedef struct glamor_composite_private {
@@ -224,10 +224,10 @@ typedef struct glamor_composite_state_image {
     struct glamor_pixmap_private* priv;
     float color[4];
     int chan_available;
-    Bool has_alpha;
     Bool mask_rgba;
     int upload;
     int repeat;
+    int transform;
     enum {
         STATE_NONE,
         STATE_TEX,

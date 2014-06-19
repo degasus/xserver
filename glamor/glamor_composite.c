@@ -44,10 +44,10 @@ glamor_composite_verify_picture(PicturePtr pic,
     Bool ret = TRUE;
     state->pixmap = NULL;
     state->priv = NULL;
-    state->has_alpha = TRUE;
     state->mask_rgba = FALSE;
     state->upload = GLAMOR_NONE;
     state->repeat = RepeatNone;
+    state->transform = FALSE;
 
     // input not available
     if(!pic) {
@@ -76,9 +76,9 @@ glamor_composite_verify_picture(PicturePtr pic,
         state->state = STATE_TEX;
         state->pixmap = glamor_get_drawable_pixmap(pic->pDrawable);
         state->priv = glamor_get_pixmap_private(state->pixmap);
-        state->has_alpha = !!PICT_FORMAT_A(pic->format);
         state->mask_rgba = !!pic->componentAlpha;
         state->repeat = pic->repeatType;
+        state->transform = !!pic->transform;
 
         if (state->priv->base.gl_fbo == GLAMOR_FBO_UNATTACHED && !destination) {
             state->upload = GLAMOR_UPLOAD_PENDING;
@@ -89,10 +89,6 @@ glamor_composite_verify_picture(PicturePtr pic,
 
         if (pic->alphaMap) {
             ErrorF("TODO: XRender fallback because of alpha map\n");
-            return FALSE;
-        }
-        if (pic->transform) {
-            ErrorF("TODO: XRender fallback because of image transform, keep care about filtering\n");
             return FALSE;
         }
     }
@@ -115,30 +111,32 @@ glamor_composite_bind_program(ScreenPtr screen)
 
         "in vec2 position;\n"
 
-        "out vec2 source_position;\n"
-        "out vec2 mask_position;\n"
+        "out vec3 source_position;\n"
+        "out vec3 mask_position;\n"
 
         "uniform vec4 dest_transform;\n"
 
-        "uniform vec4 source_transform;\n"
+        "uniform mat3 source_matrix;\n"
+        "uniform vec2 source_offset;\n"
 
-        "uniform vec4 mask_transform;\n"
+        "uniform mat3 mask_matrix;\n"
+        "uniform vec2 mask_offset;\n"
 
         "vec2 TRANS(vec2 x, vec4 t) { return x * t.xy + t.zw; }\n"
 
         "void main() {\n"
         "   gl_Position = vec4(TRANS(position, dest_transform) * 2.0 - 1.0, 0.0, 1.0);\n"
 
-            // transform to drawable coords, not to texture ones
-        "   source_position = TRANS(position, source_transform);\n"
-        "   mask_position = TRANS(position, mask_transform);\n"
+            // xrender transform, mostly identity
+        "   source_position = source_matrix * vec3(position + source_offset, 1.0);\n"
+        "   mask_position = mask_matrix * vec3(position + mask_offset, 1.0);\n"
         "}\n"
     );
     fs = glamor_compile_glsl_prog(GL_FRAGMENT_SHADER,
         "#version 130\n"
 
-        "in vec2 source_position;\n"
-        "in vec2 mask_position;\n"
+        "in vec3 source_position;\n"
+        "in vec3 mask_position;\n"
 
         "out vec4 out_color;\n"
         "out vec4 out_alpha;\n"
@@ -146,28 +144,37 @@ glamor_composite_bind_program(ScreenPtr screen)
         "uniform sampler2D source_sampler;\n"
         "uniform int source_state;\n"
         "uniform vec4 source_color;\n"
-        "uniform int source_has_alpha;\n"
         "uniform int source_repeat;\n"
         "uniform vec4 source_textransform;\n"
+        "uniform vec4 source_transform;\n"
 
         "uniform sampler2D mask_sampler;\n"
         "uniform int mask_state;\n"
         "uniform vec4 mask_color;\n"
-        "uniform int mask_has_alpha;\n"
         "uniform int mask_repeat;\n"
         "uniform vec4 mask_textransform;\n"
+        "uniform vec4 mask_transform;\n"
 
         "uniform int rgba_mask;\n"
 
         // return true if 0 < v < 1
         "bool clamped(vec2 v) {\n"
-        "   return v.x >= 0.0 && v.x <= 1.0 && v.y >= 0.0 && v.y <= 1.0;\n"
+        "   return v.x >= 0.0 && v.x < 1.0 && v.y >= 0.0 && v.y < 1.0;\n"
         "}\n"
 
         "vec2 TRANS(vec2 x, vec4 t) { return x * t.xy + t.zw; }\n"
 
-        "vec4 mysampler(int state, sampler2D sampler, vec2 position, vec4 color, int has_alpha, int repeat, vec4 textransform) {\n"
+        "vec4 mysampler(int state, sampler2D sampler, vec3 position_in, vec4 color, int repeat, vec4 textransform, vec4 transform) {\n"
         "   vec4 c;\n"
+
+            // needed for xrender transformation
+            // must be done in the pixel shader as the division isn't linear
+            // TODO: detect if the matrix scale at all / scale with a const factor
+        "   vec2 position = position_in.xy / position_in.z;\n"
+
+            // transform to drawable coords, required by custom repeat resolver
+        "   position = TRANS(position, transform);\n"
+
         "   switch(state) {\n"
 
                 // not available
@@ -177,7 +184,7 @@ glamor_composite_bind_program(ScreenPtr screen)
         "       case 1:\n"
         "           switch(repeat) {\n"
 
-                        // repeat none: transparent if our of image
+                        // repeat none: transparent if out of image
         "               case 0: if(!clamped(position)) return vec4(0.0);\n"
 
                         // repeat normal
@@ -196,7 +203,7 @@ glamor_composite_bind_program(ScreenPtr screen)
                     // discard if our of texture (only happens with large textures)
         "           if(!clamped(position)) discard;\n"
         "           c = texture2D(sampler, position);\n"
-        "           return vec4(c.rgb, has_alpha == 1 ? c.a : 1.0);\n"
+        "           return c;\n"
 
                 // const color
         "       case 2: return color;\n"
@@ -205,8 +212,8 @@ glamor_composite_bind_program(ScreenPtr screen)
         "}\n"
 
         "void main() {\n"
-        "   vec4 source = mysampler(source_state, source_sampler, source_position, source_color, source_has_alpha, source_repeat, source_textransform);\n"
-        "   vec4 mask = mysampler(mask_state, mask_sampler, mask_position, mask_color, mask_has_alpha, mask_repeat, mask_textransform);\n"
+        "   vec4 source = mysampler(source_state, source_sampler, source_position, source_color, source_repeat, source_textransform, source_transform);\n"
+        "   vec4 mask = mysampler(mask_state, mask_sampler, mask_position, mask_color, mask_repeat, mask_textransform, mask_transform);\n"
 
         "   out_color = source * ( rgba_mask == 1 ? mask : vec4(mask.a) );\n"
         "   out_alpha = source.a * mask;\n"
@@ -228,9 +235,10 @@ glamor_composite_bind_program(ScreenPtr screen)
     GET_POS(state);
     GET_POS(color);
     GET_POS(transform);
-    GET_POS(has_alpha);
     GET_POS(repeat);
     GET_POS(textransform);
+    GET_POS(matrix);
+    GET_POS(offset);
 #undef GET_POS
 #define GET_POS(a) glamor_priv->composite.a ## _pos = glGetUniformLocation(prog, #a)
     GET_POS(dest_transform);
@@ -257,7 +265,31 @@ glamor_composite_set_textures(ScreenPtr screen,
 {
     BoxPtr box;
     glamor_pixmap_fbo* tex;
+    GLenum filter;
+    float matrix[3][3] = {{1,0,0},{0,1,0},{0,0,1}};
+
     glUniform1i(priv->state_pos, state->state);
+    glUniform2f(priv->offset_pos, offset_x, offset_y);
+
+    // Transformation matrix
+    if (state->transform) {
+        int x,y;
+        for(x=0; x<3; x++)
+            for(y=0; y<3; y++)
+                matrix[x][y] = pic->transform->matrix[x][y] / 65536.0f;
+
+        switch (pic->filter) {
+            default:
+            case PictFilterFast:
+            case PictFilterNearest: filter = GL_NEAREST; break;
+            case PictFilterGood:
+            case PictFilterBest:
+            case PictFilterBilinear: filter = GL_LINEAR; break;
+        }
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+    }
+    glUniformMatrix3fv(priv->matrix_pos, 1, TRUE, matrix);
 
     switch(state->state) {
         case STATE_TEX:
@@ -271,8 +303,7 @@ glamor_composite_set_textures(ScreenPtr screen,
             glUniform4f(priv->transform_pos,
                 1.0f / pic->pDrawable->width,
                 1.0f / pic->pDrawable->height,
-                (float)offset_x / pic->pDrawable->width,
-                (float)offset_y / pic->pDrawable->height);
+                0, 0);
 
             // transformation from drawable coords to texture coords
             glUniform4f(priv->textransform_pos,
@@ -281,7 +312,6 @@ glamor_composite_set_textures(ScreenPtr screen,
                 -(float)(box->x1 - pic->pDrawable->x) / (box->x2 - box->x1),
                 -(float)(box->y1 - pic->pDrawable->y) / (box->y2 - box->y1)
             );
-            glUniform1i(priv->has_alpha_pos, state->has_alpha);
             glUniform1i(priv->repeat_pos, state->repeat);
             break;
 
@@ -311,8 +341,8 @@ glamor_composite_bind_fbo(ScreenPtr screen,
     glUniform4f(glamor_priv->composite.dest_transform_pos,
                 1.0f / (box->x2 - box->x1),
                 1.0f / (box->y2 - box->y1),
-                -(float)(box->x1 - pic->pDrawable->x) / (box->x2 - box->x1),
-                -(float)(box->y1 - pic->pDrawable->y) / (box->y2 - box->y1));
+                (float)(pic->pDrawable->x - box->x1) / (box->x2 - box->x1),
+                (float)(pic->pDrawable->y - box->y1) / (box->y2 - box->y1));
 }
 
 static Bool
