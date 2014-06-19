@@ -48,6 +48,7 @@ glamor_composite_verify_picture(PicturePtr pic,
     state->upload = GLAMOR_NONE;
     state->repeat = RepeatNone;
     state->transform = FALSE;
+    state->fake_alpha = FALSE;
 
     // input not available
     if(!pic) {
@@ -79,6 +80,14 @@ glamor_composite_verify_picture(PicturePtr pic,
         state->mask_rgba = !!pic->componentAlpha;
         state->repeat = pic->repeatType;
         state->transform = !!pic->transform;
+        state->fake_alpha = !PICT_FORMAT_A(pic->format);
+
+        if (pic->format != PICT_a8r8g8b8 && pic->format != PICT_x8r8g8b8 &&
+            pic->format != PICT_a8)
+        {
+            ErrorF("TODO: XRender fallback because of incompatible type %x, use texture_view\n", pic->format);
+            return FALSE;
+        }
 
         if (!GLAMOR_PIXMAP_PRIV_HAS_FBO(state->priv)) {
             ErrorF("XRender fallback because of not reachable pixmap of type %d\n", state->priv->base.gl_fbo);
@@ -145,6 +154,7 @@ glamor_composite_bind_program(ScreenPtr screen)
         "uniform int source_repeat;\n"
         "uniform vec4 source_textransform;\n"
         "uniform vec4 source_transform;\n"
+        "uniform int source_fake_alpha;\n"
 
         "uniform sampler2D mask_sampler;\n"
         "uniform int mask_state;\n"
@@ -152,6 +162,7 @@ glamor_composite_bind_program(ScreenPtr screen)
         "uniform int mask_repeat;\n"
         "uniform vec4 mask_textransform;\n"
         "uniform vec4 mask_transform;\n"
+        "uniform int mask_fake_alpha;\n"
 
         "uniform int rgba_mask;\n"
 
@@ -162,7 +173,7 @@ glamor_composite_bind_program(ScreenPtr screen)
 
         "vec2 TRANS(vec2 x, vec4 t) { return x * t.xy + t.zw; }\n"
 
-        "vec4 mysampler(int state, sampler2D sampler, vec3 position_in, vec4 color, int repeat, vec4 textransform, vec4 transform) {\n"
+        "vec4 mysampler(int state, sampler2D sampler, vec3 position_in, vec4 color, int repeat, vec4 textransform, vec4 transform, int fake_alpha) {\n"
         "   vec4 c;\n"
 
             // needed for xrender transformation
@@ -201,6 +212,7 @@ glamor_composite_bind_program(ScreenPtr screen)
                     // discard if our of texture (only happens with large textures)
         "           if(!clamped(position)) discard;\n"
         "           c = texture2D(sampler, position);\n"
+        "           if (fake_alpha == 1) c.a = 1.0;\n"
         "           return c;\n"
 
                 // const color
@@ -210,8 +222,8 @@ glamor_composite_bind_program(ScreenPtr screen)
         "}\n"
 
         "void main() {\n"
-        "   vec4 source = mysampler(source_state, source_sampler, source_position, source_color, source_repeat, source_textransform, source_transform);\n"
-        "   vec4 mask = mysampler(mask_state, mask_sampler, mask_position, mask_color, mask_repeat, mask_textransform, mask_transform);\n"
+        "   vec4 source = mysampler(source_state, source_sampler, source_position, source_color, source_repeat, source_textransform, source_transform, source_fake_alpha);\n"
+        "   vec4 mask = mysampler(mask_state, mask_sampler, mask_position, mask_color, mask_repeat, mask_textransform, mask_transform, mask_fake_alpha);\n"
 
         "   out_color = source * ( rgba_mask == 1 ? mask : vec4(mask.a) );\n"
         "   out_alpha = source.a * mask;\n"
@@ -237,6 +249,7 @@ glamor_composite_bind_program(ScreenPtr screen)
     GET_POS(textransform);
     GET_POS(matrix);
     GET_POS(offset);
+    GET_POS(fake_alpha);
 #undef GET_POS
 #define GET_POS(a) glamor_priv->composite.a ## _pos = glGetUniformLocation(prog, #a)
     GET_POS(dest_transform);
@@ -311,6 +324,7 @@ glamor_composite_set_textures(ScreenPtr screen,
                 -(float)(box->y1 - pic->pDrawable->y) / (box->y2 - box->y1)
             );
             glUniform1i(priv->repeat_pos, state->repeat);
+            glUniform1i(priv->fake_alpha_pos, state->fake_alpha);
             break;
 
         case STATE_FILL_CONST:
@@ -373,7 +387,7 @@ glamor_composite_set_blend_state(ScreenPtr screen,
             break;
         case PictOpOver:
             src = GL_ONE;
-            dst = state->mask.mask_rgba ? GL_ONE_MINUS_SRC1_COLOR : GL_ONE_MINUS_SRC_ALPHA;
+            dst = GL_ONE_MINUS_SRC_ALPHA;
             break;
         case PictOpOverReverse:
             src = GL_ONE_MINUS_DST_ALPHA;
@@ -385,7 +399,7 @@ glamor_composite_set_blend_state(ScreenPtr screen,
             break;
         case PictOpInReverse:
             src = GL_ZERO;
-            dst = state->mask.mask_rgba ? GL_SRC1_COLOR : GL_SRC_ALPHA;
+            dst = GL_SRC_ALPHA;
             break;
         case PictOpOut:
             src = GL_ONE_MINUS_DST_ALPHA;
@@ -393,19 +407,19 @@ glamor_composite_set_blend_state(ScreenPtr screen,
             break;
         case PictOpOutReverse:
             src = GL_ZERO;
-            dst = state->mask.mask_rgba ? GL_ONE_MINUS_SRC1_COLOR : GL_ONE_MINUS_SRC_ALPHA;
+            dst = GL_ONE_MINUS_SRC_ALPHA;
             break;
         case PictOpAtop:
             src = GL_DST_ALPHA;
-            dst = state->mask.mask_rgba ? GL_ONE_MINUS_SRC1_COLOR : GL_ONE_MINUS_SRC_ALPHA;
+            dst = GL_ONE_MINUS_SRC_ALPHA;
             break;
         case PictOpAtopReverse:
             src = GL_ONE_MINUS_DST_ALPHA;
-            dst = state->mask.mask_rgba ? GL_SRC1_COLOR : GL_SRC_ALPHA;
+            dst = GL_SRC_ALPHA;
             break;
         case PictOpXor:
             src = GL_ONE_MINUS_DST_ALPHA;
-            dst = state->mask.mask_rgba ? GL_ONE_MINUS_SRC1_COLOR : GL_ONE_MINUS_SRC_ALPHA;
+            dst = GL_ONE_MINUS_SRC_ALPHA;
             break;
         case PictOpAdd:
             src = GL_ONE;
@@ -419,6 +433,16 @@ glamor_composite_set_blend_state(ScreenPtr screen,
             ErrorF("TODO: XRender fallback because of not implemented blend op %d\n", op);
             break;
     }
+
+    // We use full argb textures for xrgb and rgb pictures.
+    // Not having alpha is always 1.0, so just fake it here:
+    if (state->dest.fake_alpha && src == GL_DST_ALPHA) src = GL_ONE;
+    if (state->dest.fake_alpha && src == GL_ONE_MINUS_DST_ALPHA) src = GL_ZERO;
+
+    // With rgba masking, we have to use source.a * mask.rgba for blending.
+    // As we want to write source.rgba * mask.rgba, we have to use an additional color output.
+    if (state->mask.mask_rgba && dst == GL_SRC_ALPHA) dst = GL_SRC1_COLOR;
+    if (state->mask.mask_rgba && dst == GL_ONE_MINUS_SRC_ALPHA) dst = GL_ONE_MINUS_SRC1_COLOR;
 
     glBlendFunc(src, dst);
     glEnable(GL_BLEND);
