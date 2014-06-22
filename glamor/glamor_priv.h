@@ -421,23 +421,6 @@ typedef struct glamor_pixmap_fbo {
  * box[1] = {1024,0,2048,2048}
  * ...
  *
- * For GLAMOR_TEXTURE_ATLAS nbox should be 1. And box
- * and fbo both has one elements, and the box store
- * the relatively coords in the fbo of this pixmap:
- *
- * fbo
- * ******************
- * *   pixmap       *
- * *   *********    *
- * *   *       *    *
- * *   *********    *
- * *                *
- * ******************
- *
- * Assume the pixmap is at the (100,100) relatively to
- * the fbo's origin.
- * box[0]={100, 100, 1124, 1124};
- *
  * Considering large pixmap is not a normal case, to keep
  * it simple, I designe it as the following way.
  * When deal with a large pixmap, it split the working
@@ -448,8 +431,6 @@ typedef struct glamor_pixmap_fbo {
  * to the box and fbo elements. Thus the inner routines
  * can handle it as normal, only the coords calculation need
  * to aware of it's large pixmap.
- *
- * Currently, we haven't implemented the atlas pixmap.
  *
  **/
 
@@ -518,23 +499,11 @@ typedef struct glamor_pixmap_private_large {
     glamor_pixmap_fbo **fbo_array;
 } glamor_pixmap_private_large_t;
 
-/*
- * @box: the relative coords in the corresponding fbo.
- */
-typedef struct glamor_pixmap_private_atlas {
-    union {
-        glamor_pixmap_type_t type;
-        glamor_pixmap_private_base_t base;
-    };
-    BoxRec box;
-} glamor_pixmap_private_atlas_t;
-
 typedef struct glamor_pixmap_private {
     union {
         glamor_pixmap_type_t type;
         glamor_pixmap_private_base_t base;
         glamor_pixmap_private_large_t large;
-        glamor_pixmap_private_atlas_t atlas;
     };
 } glamor_pixmap_private;
 
