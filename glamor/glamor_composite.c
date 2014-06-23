@@ -48,6 +48,8 @@ glamor_composite_verify_picture(PicturePtr pic,
     state->repeat = RepeatNone;
     state->transform = FALSE;
     state->fake_alpha = FALSE;
+    state->pixmap_offset_x = 0;
+    state->pixmap_offset_y = 0;
 
     // input not available
     if(!pic) {
@@ -89,6 +91,10 @@ glamor_composite_verify_picture(PicturePtr pic,
         state->repeat = pic->repeatType;
         state->transform = !!pic->transform;
         state->fake_alpha = !PICT_FORMAT_A(pic->format);
+        state->pixmap_offset_x = pic->pDrawable->x;
+        state->pixmap_offset_y = pic->pDrawable->y;
+
+
 
         if (pic->format != PICT_a8r8g8b8 && pic->format != PICT_x8r8g8b8 &&
             pic->format != PICT_a8)
@@ -365,8 +371,8 @@ glamor_composite_set_textures(ScreenPtr screen,
             glUniform4f(priv->textransform_pos,
                 (float)pic->pDrawable->width / (box->x2 - box->x1),
                 (float)pic->pDrawable->height / (box->y2 - box->y1),
-                -(float)(box->x1 - pic->pDrawable->x) / (box->x2 - box->x1),
-                -(float)(box->y1 - pic->pDrawable->y) / (box->y2 - box->y1)
+                -(float)(box->x1 - state->pixmap_offset_x) / (box->x2 - box->x1),
+                -(float)(box->y1 - state->pixmap_offset_y) / (box->y2 - box->y1)
             );
             glUniform1i(priv->repeat_pos, state->repeat);
             glUniform1i(priv->fake_alpha_pos, state->fake_alpha);
@@ -415,6 +421,9 @@ glamor_composite_bind_fbo(ScreenPtr screen,
     glamor_screen_private *glamor_priv = glamor_get_screen_private(screen);
     BoxPtr box = glamor_pixmap_box_at(state->priv, box_x, box_y);
 
+    int off_x, off_y;
+    glamor_get_drawable_deltas(pic->pDrawable, state->pixmap, &off_x, &off_y);
+
     glamor_set_destination_pixmap_fbo(
         glamor_pixmap_fbo_at(state->priv, box_x, box_y),
         0, 0, box->x2 - box->x1, box->y2 - box->y1);
@@ -424,8 +433,8 @@ glamor_composite_bind_fbo(ScreenPtr screen,
     glUniform4f(glamor_priv->composite.dest_transform_pos,
                 1.0f / (box->x2 - box->x1),
                 1.0f / (box->y2 - box->y1),
-                (float)(pic->pDrawable->x - box->x1) / (box->x2 - box->x1),
-                (float)(pic->pDrawable->y - box->y1) / (box->y2 - box->y1));
+                (float)(state->pixmap_offset_x + off_x - box->x1) / (box->x2 - box->x1),
+                (float)(state->pixmap_offset_y + off_y - box->y1) / (box->y2 - box->y1));
 }
 
 static Bool
@@ -560,11 +569,17 @@ glamor_composite_gl(CARD8 op,
     }
 
     // apply clipping and generate a Region for the not-clipped-area
+    // WARNING: Through clipping vars are stored in the picture, they are in pixmap coords.
+    //          So we have to apply the pixmap offset as clipping offset.
+    //          Of course, the resulting region is also in dest pixmap coords.
     if (!miComputeCompositeRegion(&region,
                                   source, mask, dest,
-                                  x_source, y_source,
-                                  x_mask, y_mask,
-                                  x_dest, y_dest,
+                                  x_source + state.source.pixmap_offset_x,
+                                  y_source + state.source.pixmap_offset_y,
+                                  x_mask + state.mask.pixmap_offset_x,
+                                  y_mask + state.mask.pixmap_offset_y,
+                                  x_dest + state.dest.pixmap_offset_x,
+                                  y_dest + state.dest.pixmap_offset_y,
                                   width, height)) {
         // source + mask + dest doesn't overlap, so nothing to do
         return TRUE;
@@ -595,10 +610,10 @@ glamor_composite_gl(CARD8 op,
     glEnableVertexAttribArray(GLAMOR_VERTEX_POS);
     glVertexAttribPointer(GLAMOR_VERTEX_POS, 2, GL_SHORT, GL_FALSE, 0, vbo_offset);
     for (i = 0; i < nbox; i++) {
-        vertices[6] = vertices[0] = box[i].x1;
-        vertices[3] = vertices[1] = box[i].y1;
-        vertices[4] = vertices[2] = box[i].x2;
-        vertices[7] = vertices[5] = box[i].y2;
+        vertices[6] = vertices[0] = box[i].x1 - state.dest.pixmap_offset_x;
+        vertices[3] = vertices[1] = box[i].y1 - state.dest.pixmap_offset_y;
+        vertices[4] = vertices[2] = box[i].x2 - state.dest.pixmap_offset_x;
+        vertices[7] = vertices[5] = box[i].y2 - state.dest.pixmap_offset_y;
         vertices += 8;
     }
     glamor_put_vbo_space(screen);

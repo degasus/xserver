@@ -238,6 +238,8 @@ typedef struct glamor_composite_state_image {
         STATE_FILL_CONST,
         STATE_FILL_LINEAR,
     } state;
+    int pixmap_offset_x;
+    int pixmap_offset_y;
 } glamor_composite_state_image;
 
 typedef struct glamor_composite_state {
