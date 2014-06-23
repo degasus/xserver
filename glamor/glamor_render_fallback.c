@@ -24,34 +24,6 @@
 #include "glamor_render_fallback.h"
 
 void
-glamor_composite_fallback(CARD8 op,
-                          PicturePtr source,
-                          PicturePtr mask,
-                          PicturePtr dest,
-                          INT16 x_source, INT16 y_source,
-                          INT16 x_mask, INT16 y_mask,
-                          INT16 x_dest, INT16 y_dest,
-                          CARD16 width, CARD16 height)
-{
-    miCompositeSourceValidate(source);
-    if (mask)
-        miCompositeSourceValidate(mask);
-
-    if (glamor_prepare_access_picture(dest, GLAMOR_ACCESS_RW) &&
-        glamor_prepare_access_picture(source, GLAMOR_ACCESS_RO) &&
-        glamor_prepare_access_picture(mask, GLAMOR_ACCESS_RO))
-    {
-        fbComposite(op,
-                    source, mask, dest,
-                    x_source, y_source,
-                    x_mask, y_mask, x_dest, y_dest, width, height);
-    }
-    glamor_finish_access_picture(mask);
-    glamor_finish_access_picture(source);
-    glamor_finish_access_picture(dest);
-}
-
-void
 glamor_trapezoids_fallback(CARD8 op,
                            PicturePtr src,
                            PicturePtr dst,

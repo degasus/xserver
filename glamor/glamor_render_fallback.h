@@ -27,18 +27,6 @@
 #include "fbpict.h"
 
 void
-glamor_composite_fallback(CARD8 op,
-                          PicturePtr source,
-                          PicturePtr mask,
-                          PicturePtr dest,
-                          INT16 x_source, INT16 y_source,
-                          INT16 x_mask, INT16 y_mask,
-                          INT16 x_dest, INT16 y_dest,
-                          CARD16 width, CARD16 height);
-
-#define glamor_composite glamor_composite_fallback
-
-void
 glamor_trapezoids_fallback(CARD8 op,
                            PicturePtr pSrc,
                            PicturePtr pDst,
