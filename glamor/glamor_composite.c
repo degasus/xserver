@@ -41,7 +41,6 @@ glamor_composite_verify_picture(PicturePtr pic,
                                 glamor_composite_state_image* state,
                                 Bool destination)
 {
-    Bool ret = TRUE;
     state->pixmap = NULL;
     state->priv = NULL;
     state->mask_rgba = FALSE;
@@ -53,10 +52,14 @@ glamor_composite_verify_picture(PicturePtr pic,
     // input not available
     if(!pic) {
         state->state = STATE_NONE;
-        ret = !destination;
+        return !destination;
 
     // filled
     } else if(!pic->pDrawable) {
+        if (destination)
+            // constant pictures aren't supported as dest
+            return FALSE;
+
         switch(pic->pSourcePict->type) {
             case SourcePictTypeSolidFill:
                 state->state = STATE_FILL_CONST;
@@ -64,12 +67,17 @@ glamor_composite_verify_picture(PicturePtr pic,
                     (pic->pSourcePict->solidFill.color,
                      &state->color[0], &state->color[1],
                      &state->color[2], &state->color[3], PICT_a8r8g8b8);
-                ret = !destination;
+                break;
+            case SourcePictTypeLinear:
+                if (pic->pSourcePict->linear.nstops > 4) {
+                    ErrorF("TODO: XRender fallback: linear gradient only supports 4 stop points but %d requested.\n", pic->pSourcePict->linear.nstops);
+                    return FALSE;
+                }
+                state->state = STATE_FILL_LINEAR;
                 break;
             default:
                 ErrorF("TODO: XRender fallback because of not implemented fill style %d\n", pic->pSourcePict->type);
-                ret = FALSE;
-                break;
+                return FALSE;
         }
 
     // common texture
@@ -99,7 +107,7 @@ glamor_composite_verify_picture(PicturePtr pic,
             return FALSE;
         }
     }
-    return ret;
+    return TRUE;
 }
 
 static Bool
@@ -155,6 +163,8 @@ glamor_composite_bind_program(ScreenPtr screen)
         "uniform vec4 source_textransform;\n"
         "uniform vec4 source_transform;\n"
         "uniform int source_fake_alpha;\n"
+        "uniform vec4 source_gradient_stops;\n"
+        "uniform vec4 source_gradient_colors[4];\n"
 
         "uniform sampler2D mask_sampler;\n"
         "uniform int mask_state;\n"
@@ -163,6 +173,8 @@ glamor_composite_bind_program(ScreenPtr screen)
         "uniform vec4 mask_textransform;\n"
         "uniform vec4 mask_transform;\n"
         "uniform int mask_fake_alpha;\n"
+        "uniform vec4 mask_gradient_stops;\n"
+        "uniform vec4 mask_gradient_colors[4];\n"
 
         "uniform int rgba_mask;\n"
 
@@ -173,16 +185,15 @@ glamor_composite_bind_program(ScreenPtr screen)
 
         "vec2 TRANS(vec2 x, vec4 t) { return x * t.xy + t.zw; }\n"
 
-        "vec4 mysampler(int state, sampler2D sampler, vec3 position_in, vec4 color, int repeat, vec4 textransform, vec4 transform, int fake_alpha) {\n"
+        "vec4 mysampler(int state, sampler2D sampler, vec3 position_in, vec4 color, int repeat, vec4 textransform, vec4 transform, int fake_alpha, \n"
+        "               vec4 gradient_stops, vec4 gradient_colors[4]) {\n"
         "   vec4 c;\n"
+        "   float pos;\n"
 
             // needed for xrender transformation
             // must be done in the pixel shader as the division isn't linear
             // TODO: detect if the matrix scale at all / scale with a const factor
         "   vec2 position = position_in.xy / position_in.z;\n"
-
-            // transform to drawable coords, required by custom repeat resolver
-        "   position = TRANS(position, transform);\n"
 
         "   switch(state) {\n"
 
@@ -191,6 +202,9 @@ glamor_composite_bind_program(ScreenPtr screen)
 
                 // common texture
         "       case 1:\n"
+
+                    // transform to drawable coords
+        "           position = TRANS(position, transform);\n"
         "           switch(repeat) {\n"
 
                         // repeat none: transparent if out of image
@@ -217,13 +231,34 @@ glamor_composite_bind_program(ScreenPtr screen)
 
                 // const color
         "       case 2: return color;\n"
+
+                // linear gradient_colors
+        "       case 3:\n"
+                    // transform into linear gradient space
+        "           position = (position - transform.xy) * transform.zw;\n"
+        "           pos = (position.x + position.y) / (transform.z * transform.z + transform.w * transform.w);\n"
+
+        "           if(pos <= gradient_stops.x)\n"
+        "               return gradient_colors[0];"
+        "           if(pos <= gradient_stops.y)\n"
+        "               return mix(gradient_colors[0], gradient_colors[1],\n"
+        "                          (pos - gradient_stops.x) / (gradient_stops.y - gradient_stops.x));"
+        "           if(pos <= gradient_stops.z)\n"
+        "               return mix(gradient_colors[1], gradient_colors[2],\n"
+        "                          (pos - gradient_stops.y) / (gradient_stops.z - gradient_stops.y));"
+        "           if(pos <= gradient_stops.w)\n"
+        "               return mix(gradient_colors[2], gradient_colors[3],\n"
+        "                          (pos - gradient_stops.z) / (gradient_stops.w - gradient_stops.z));"
+        "           return gradient_colors[3];"
         "   }\n"
         "   return vec4(1.0, 1.0, 1.0, 1.0);\n"
         "}\n"
 
         "void main() {\n"
-        "   vec4 source = mysampler(source_state, source_sampler, source_position, source_color, source_repeat, source_textransform, source_transform, source_fake_alpha);\n"
-        "   vec4 mask = mysampler(mask_state, mask_sampler, mask_position, mask_color, mask_repeat, mask_textransform, mask_transform, mask_fake_alpha);\n"
+        "   vec4 source = mysampler(source_state, source_sampler, source_position, source_color, source_repeat, source_textransform, source_transform, source_fake_alpha,\n"
+        "                           source_gradient_stops, source_gradient_colors);\n"
+        "   vec4 mask   = mysampler(mask_state, mask_sampler, mask_position, mask_color, mask_repeat, mask_textransform, mask_transform, mask_fake_alpha,\n"
+        "                           mask_gradient_stops, mask_gradient_colors);\n"
 
         "   out_color = source * ( rgba_mask == 1 ? mask : vec4(mask.a) );\n"
         "   out_alpha = source.a * mask;\n"
@@ -250,6 +285,8 @@ glamor_composite_bind_program(ScreenPtr screen)
     GET_POS(matrix);
     GET_POS(offset);
     GET_POS(fake_alpha);
+    GET_POS(gradient_stops);
+    GET_POS(gradient_colors);
 #undef GET_POS
 #define GET_POS(a) glamor_priv->composite.a ## _pos = glGetUniformLocation(prog, #a)
     GET_POS(dest_transform);
@@ -277,7 +314,11 @@ glamor_composite_set_textures(ScreenPtr screen,
     BoxPtr box;
     glamor_pixmap_fbo* tex;
     GLenum filter;
+    PictLinearGradient* linear;
+    int i;
     float matrix[3][3] = {{1,0,0},{0,1,0},{0,0,1}};
+    float gradient_colors[4][4] = {{0,0,0,0},{0,0,0,0},{0,0,0,0},{0,0,0,0}};
+    float gradient_stops[4] = {0,0,0,0};
 
     glUniform1i(priv->state_pos, state->state);
     glUniform2f(priv->offset_pos, offset_x, offset_y);
@@ -331,6 +372,32 @@ glamor_composite_set_textures(ScreenPtr screen,
             glUniform4fv(priv->color_pos, 1, state->color);
             break;
 
+        case STATE_FILL_LINEAR:
+            linear = &pic->pSourcePict->linear;
+            // Transform from pixel into linear gradient space
+            glUniform4f(priv->transform_pos,
+                        linear->p1.x / 65536.0f,
+                        linear->p1.y / 65536.0f,
+                        (linear->p2.x - linear->p1.x) / 65536.0f,
+                        (linear->p2.y - linear->p1.y) / 65536.0f);
+
+            for (i=0; i<4; i++) {
+                if (linear->nstops > i) {
+                    gradient_stops[i] = linear->stops[i].x / 65536.0f;
+                    gradient_colors[i][0] = linear->stops[i].color.red / 65535.0f;
+                    gradient_colors[i][1] = linear->stops[i].color.green / 65535.0f;
+                    gradient_colors[i][2] = linear->stops[i].color.blue / 65535.0f;
+                    gradient_colors[i][3] = linear->stops[i].color.alpha / 65535.0f;
+                } else {
+                    gradient_stops[i] = i>0 ? gradient_stops[i-1] : 0.0f;
+                    gradient_colors[i][0] = i>0 ? gradient_colors[i-1][0] : 0.0f;
+                    gradient_colors[i][1] = i>0 ? gradient_colors[i-1][1] : 0.0f;
+                    gradient_colors[i][2] = i>0 ? gradient_colors[i-1][2] : 0.0f;
+                    gradient_colors[i][3] = i>0 ? gradient_colors[i-1][3] : 0.0f;
+                }
+            }
+            glUniform4fv(priv->gradient_stops_pos, 1, gradient_stops);
+            glUniform4fv(priv->gradient_colors_pos, 4, gradient_colors);
         case STATE_NONE: { break; }
     }
 }

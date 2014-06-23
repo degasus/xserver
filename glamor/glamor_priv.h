@@ -209,6 +209,8 @@ typedef struct glamor_composite_private_image {
     GLint matrix_pos;
     GLint offset_pos;
     GLint fake_alpha_pos;
+    GLint gradient_stops_pos;
+    GLint gradient_colors_pos;
 } glamor_composite_private_image;
 
 typedef struct glamor_composite_private {
@@ -234,6 +236,7 @@ typedef struct glamor_composite_state_image {
         STATE_NONE,
         STATE_TEX,
         STATE_FILL_CONST,
+        STATE_FILL_LINEAR,
     } state;
 } glamor_composite_state_image;
 
