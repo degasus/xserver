@@ -97,14 +97,18 @@ glamor_composite_verify_picture(PicturePtr pic,
             return FALSE;
         }
 
-        if (!GLAMOR_PIXMAP_PRIV_HAS_FBO(state->priv)) {
-            ErrorF("XRender fallback because of not reachable pixmap of type %d\n", state->priv->base.gl_fbo);
-            return FALSE;
-        }
-
         if (pic->alphaMap) {
             ErrorF("TODO: XRender fallback because of alpha map\n");
             return FALSE;
+        }
+
+        if (!GLAMOR_PIXMAP_PRIV_HAS_FBO(state->priv)) {
+            if (destination)
+                return FALSE;
+            if (glamor_upload_picture_to_texture(pic) != GLAMOR_UPLOAD_DONE) {
+                ErrorF("XRender fallback because of not reachable pixmap of type %d\n", state->priv->type);
+                return FALSE;
+            }
         }
     }
     return TRUE;
