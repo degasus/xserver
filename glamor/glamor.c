@@ -309,7 +309,7 @@ glamor_create_screen_resources(ScreenPtr screen)
     return ret;
 }
 
-#if 0
+#if 1
 #include "glamor_render_fallback.h"
 #endif
 

@@ -55,23 +55,9 @@ glamor_add_traps_fallback(PicturePtr picture,
 
 #define glamor_composite_rectangles miCompositeRects
 
-void
-glamor_glyphs_fallback(CARD8 op,
-                       PicturePtr src,
-                       PicturePtr dst,
-                       PictFormatPtr mask_format,
-                       INT16 x_src, INT16 y_src,
-                       int nlist, GlyphListPtr list,
-                       GlyphPtr * glyphs);
+#define glamor_glyphs miGlyphs
 
-
-#define glamor_glyphs glamor_glyphs_fallback
-
-void
-glamor_glyph_unrealize_fallback(ScreenPtr screen,
-                                GlyphPtr glyph);
-
-#define glamor_glyph_unrealize glamor_glyph_unrealize_fallback
+#define glamor_glyph_unrealize miUnrealizeGlyph
 
 #define glamor_create_picture miCreatePicture
 

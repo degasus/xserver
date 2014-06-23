@@ -70,30 +70,3 @@ glamor_add_traps_fallback(PicturePtr picture,
         fbAddTraps(picture, x_off, y_off, ntrap, traps);
     glamor_finish_access_picture(picture);
 }
-
-void
-glamor_glyphs_fallback(CARD8 op,
-                       PicturePtr src,
-                       PicturePtr dst,
-                       PictFormatPtr mask_format,
-                       INT16 x_src, INT16 y_src,
-                       int nlist, GlyphListPtr list,
-                       GlyphPtr * glyphs)
-{
-    if (glamor_prepare_access_picture(dst, GLAMOR_ACCESS_RW) &&
-        glamor_prepare_access_picture(src, GLAMOR_ACCESS_RO))
-    {
-        fbGlyphs(op, src, dst, mask_format,
-                 x_src, y_src,
-                 nlist, list, glyphs);
-    }
-    glamor_finish_access_picture(src);
-    glamor_finish_access_picture(dst);
-}
-
-void
-glamor_glyph_unrealize_fallback(ScreenPtr screen,
-                                GlyphPtr glyph)
-{
-    fbUnrealizeGlyph(screen, glyph);
-}
