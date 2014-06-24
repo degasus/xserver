@@ -25,11 +25,19 @@
 #include "glamor_transform.h"
 #include "glamor_prepare.h"
 
-static const glamor_facet glamor_facet_poly_lines = {
+static const glamor_facet glamor_facet_poly_lines_130 = {
+    .name = "poly_lines",
+    .version = 130,
+    .vs_vars = "attribute vec4 primitive;\n",
+    .vs_exec = ("       vec2 dir = normalize(primitive.zw - primitive.xy);\n"
+                "       vec2 pos = (gl_VertexID == 0 ? primitive.xy : primitive.zw) - 0.5 * dir;\n"
+                GLAMOR_POS(gl_Position, pos)),
+};
+
+static const glamor_facet glamor_facet_poly_lines_120 = {
     .name = "poly_lines",
     .vs_vars = "attribute vec2 primitive;\n",
-    .vs_exec = ("       vec2 pos = vec2(0.0,0.0);\n"
-                GLAMOR_POS(gl_Position, primitive.xy)),
+    .vs_exec = (GLAMOR_POS(gl_Position, primitive.xy)),
 };
 
 static Bool
@@ -46,6 +54,8 @@ glamor_poly_lines_solid_gl(DrawablePtr drawable, GCPtr gc,
     char *vbo_offset;
     int box_x, box_y;
     int add_last;
+    const glamor_facet* facet;
+    Bool use_instance;
 
     pixmap_priv = glamor_get_pixmap_private(pixmap);
     if (!GLAMOR_PIXMAP_PRIV_HAS_FBO(pixmap_priv))
@@ -60,9 +70,12 @@ glamor_poly_lines_solid_gl(DrawablePtr drawable, GCPtr gc,
 
     glamor_make_current(glamor_priv);
 
+    use_instance = glamor_priv->glsl_version >= 130;
+    facet = use_instance ? &glamor_facet_poly_lines_130
+                         : &glamor_facet_poly_lines_120;
     prog = glamor_use_program_fill(pixmap, gc,
                                    &glamor_priv->poly_line_program,
-                                   &glamor_facet_poly_lines);
+                                   facet);
 
     if (!prog)
         goto bail_ctx;
@@ -74,8 +87,14 @@ glamor_poly_lines_solid_gl(DrawablePtr drawable, GCPtr gc,
                              &vbo_offset);
 
     glEnableVertexAttribArray(GLAMOR_VERTEX_POS);
-    glVertexAttribPointer(GLAMOR_VERTEX_POS, 2, GL_SHORT, GL_FALSE,
-                          sizeof (DDXPointRec), vbo_offset);
+    if (use_instance) {
+        glVertexAttribPointer(GLAMOR_VERTEX_POS, 4, GL_SHORT, GL_FALSE,
+                            sizeof (DDXPointRec), vbo_offset);
+        glVertexAttribDivisor(GLAMOR_VERTEX_POS, 1);
+    } else {
+        glVertexAttribPointer(GLAMOR_VERTEX_POS, 2, GL_SHORT, GL_FALSE,
+                            sizeof (DDXPointRec), vbo_offset);
+    }
 
     if (mode == CoordModePrevious) {
         int i;
@@ -112,13 +131,18 @@ glamor_poly_lines_solid_gl(DrawablePtr drawable, GCPtr gc,
                       box->x2 - box->x1,
                       box->y2 - box->y1);
             box++;
-            glDrawArrays(GL_LINE_STRIP, 0, n + add_last);
+            if (use_instance)
+                glDrawArraysInstanced(GL_LINES, 0, 2, n + add_last - 1);
+            else
+                glDrawArrays(GL_LINE_STRIP, 0, n + add_last);
         }
     }
 
     glDisable(GL_SCISSOR_TEST);
     glDisable(GL_COLOR_LOGIC_OP);
     glDisableVertexAttribArray(GLAMOR_VERTEX_POS);
+    if (use_instance)
+        glVertexAttribDivisor(GLAMOR_VERTEX_POS, 0);
 
     return TRUE;
 bail_ctx:
