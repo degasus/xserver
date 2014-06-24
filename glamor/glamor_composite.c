@@ -93,13 +93,15 @@ glamor_composite_verify_picture(PicturePtr pic,
         state->fake_alpha = !PICT_FORMAT_A(pic->format);
         state->pixmap_offset_x = pic->pDrawable->x;
         state->pixmap_offset_y = pic->pDrawable->y;
-
-
+        state->format = PICT_FORMAT_TYPE(pic->format);
 
         if (pic->format != PICT_a8r8g8b8 && pic->format != PICT_x8r8g8b8 &&
-            pic->format != PICT_a8)
+            pic->format != PICT_a8 && (destination || (
+                pic->format != PICT_a8b8g8r8 && pic->format != PICT_x8b8g8r8 &&
+                pic->format != PICT_b8g8r8a8 && pic->format != PICT_b8g8r8x8
+            )))
         {
-            ErrorF("TODO: XRender fallback because of incompatible type %x, use texture_view\n", pic->format);
+            ErrorF("TODO: XRender fallback because of incompatible type %x for dest %d, use texture_view\n", pic->format, destination);
             return FALSE;
         }
 
@@ -175,6 +177,7 @@ glamor_composite_bind_program(ScreenPtr screen)
         "uniform int source_fake_alpha;\n"
         "uniform vec4 source_gradient_stops;\n"
         "uniform vec4 source_gradient_colors[4];\n"
+        "uniform int source_format;\n"
 
         "uniform sampler2D mask_sampler;\n"
         "uniform int mask_state;\n"
@@ -185,6 +188,7 @@ glamor_composite_bind_program(ScreenPtr screen)
         "uniform int mask_fake_alpha;\n"
         "uniform vec4 mask_gradient_stops;\n"
         "uniform vec4 mask_gradient_colors[4];\n"
+        "uniform int mask_format;\n"
 
         "uniform int rgba_mask;\n"
 
@@ -196,7 +200,7 @@ glamor_composite_bind_program(ScreenPtr screen)
         "vec2 TRANS(vec2 x, vec4 t) { return x * t.xy + t.zw; }\n"
 
         "vec4 mysampler(int state, sampler2D sampler, vec3 position_in, vec4 color, int repeat, vec4 textransform, vec4 transform, int fake_alpha, \n"
-        "               vec4 gradient_stops, vec4 gradient_colors[4]) {\n"
+        "               vec4 gradient_stops, vec4 gradient_colors[4], int format) {\n"
         "   vec4 c;\n"
         "   float pos;\n"
 
@@ -235,7 +239,20 @@ glamor_composite_bind_program(ScreenPtr screen)
 
                     // discard if our of texture (only happens with large textures)
         "           if(!clamped(position)) discard;\n"
+
         "           c = texture2D(sampler, position);\n"
+
+                    // format convertion
+        "           switch(format) {\n"
+        "               case 1:\n" // PICT_TYPE_A
+        "                   c = c.aaaa; break;\n"
+        "               case 2:\n" // PICT_TYPE_ARGB -- the default
+        "                   c = c.rgba; break;\n"
+        "               case 3:\n" // PICT_TYPE_ABGR
+        "                   c = c.bgra; break;\n"
+        "               case 8:\n" // PICT_TYPE_BGRA
+        "                   c = c.abgr; break;\n"
+        "           }\n"
         "           if (fake_alpha == 1) c.a = 1.0;\n"
         "           return c;\n"
 
@@ -266,9 +283,9 @@ glamor_composite_bind_program(ScreenPtr screen)
 
         "void main() {\n"
         "   vec4 source = mysampler(source_state, source_sampler, source_position, source_color, source_repeat, source_textransform, source_transform, source_fake_alpha,\n"
-        "                           source_gradient_stops, source_gradient_colors);\n"
+        "                           source_gradient_stops, source_gradient_colors, source_format);\n"
         "   vec4 mask   = mysampler(mask_state, mask_sampler, mask_position, mask_color, mask_repeat, mask_textransform, mask_transform, mask_fake_alpha,\n"
-        "                           mask_gradient_stops, mask_gradient_colors);\n"
+        "                           mask_gradient_stops, mask_gradient_colors, mask_format);\n"
 
         "   out_color = source * ( rgba_mask == 1 ? mask : vec4(mask.a) );\n"
         "   out_alpha = source.a * mask;\n"
@@ -297,6 +314,7 @@ glamor_composite_bind_program(ScreenPtr screen)
     GET_POS(fake_alpha);
     GET_POS(gradient_stops);
     GET_POS(gradient_colors);
+    GET_POS(format);
 #undef GET_POS
 #define GET_POS(a) glamor_priv->composite.a ## _pos = glGetUniformLocation(prog, #a)
     GET_POS(dest_transform);
@@ -376,6 +394,7 @@ glamor_composite_set_textures(ScreenPtr screen,
             );
             glUniform1i(priv->repeat_pos, state->repeat);
             glUniform1i(priv->fake_alpha_pos, state->fake_alpha);
+            glUniform1i(priv->format_pos, state->format);
             break;
 
         case STATE_FILL_CONST:

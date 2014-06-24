@@ -211,6 +211,7 @@ typedef struct glamor_composite_private_image {
     GLint fake_alpha_pos;
     GLint gradient_stops_pos;
     GLint gradient_colors_pos;
+    GLint format_pos;
 } glamor_composite_private_image;
 
 typedef struct glamor_composite_private {
@@ -232,6 +233,7 @@ typedef struct glamor_composite_state_image {
     int repeat;
     int transform;
     int fake_alpha;
+    int format;
     enum {
         STATE_NONE,
         STATE_TEX,
