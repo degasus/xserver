@@ -127,6 +127,7 @@ glamor_composite_bind_program(ScreenPtr screen)
 {
     glamor_screen_private *glamor_priv = glamor_get_screen_private(screen);
     GLuint fs, vs, prog;
+    char fs_shader[1024*8];
 
     if (glamor_priv->composite.program) {
         glUseProgram(glamor_priv->composite.program);
@@ -159,14 +160,21 @@ glamor_composite_bind_program(ScreenPtr screen)
         "   mask_position = mask_matrix * vec3(position + mask_offset, 1.0);\n"
         "}\n"
     );
-    fs = glamor_compile_glsl_prog(GL_FRAGMENT_SHADER,
+
+    snprintf(fs_shader, sizeof(fs_shader),
         "#version 130\n"
+
+        "#if %d\n"
+        "#define BLEND_EXTENDED\n"
+        "#endif\n"
 
         "in vec3 source_position;\n"
         "in vec3 mask_position;\n"
 
         "out vec4 out_color;\n"
+        "#ifdef BLEND_EXTENDED\n"
         "out vec4 out_alpha;\n"
+        "#endif\n"
 
         "uniform sampler2D source_sampler;\n"
         "uniform int source_state;\n"
@@ -288,15 +296,19 @@ glamor_composite_bind_program(ScreenPtr screen)
         "                           mask_gradient_stops, mask_gradient_colors, mask_format);\n"
 
         "   out_color = source * ( rgba_mask == 1 ? mask : vec4(mask.a) );\n"
+        "#ifdef BLEND_EXTENDED\n"
         "   out_alpha = source.a * mask;\n"
-        "}\n"
-    );
+        "#endif\n"
+        "}\n", glamor_priv->has_blend_extended);
+    fs = glamor_compile_glsl_prog(GL_FRAGMENT_SHADER, fs_shader);
     prog = glCreateProgram();
     glAttachShader(prog, vs);
     glAttachShader(prog, fs);
     glBindAttribLocation(prog, GLAMOR_VERTEX_POS, "position");
-    glBindFragDataLocationIndexed(prog, 0, 0, "out_color");
-    glBindFragDataLocationIndexed(prog, 0, 1, "out_alpha");
+    if (glamor_priv->has_blend_extended) {
+        glBindFragDataLocationIndexed(prog, 0, 0, "out_color");
+        glBindFragDataLocationIndexed(prog, 0, 1, "out_alpha");
+    }
     glamor_link_glsl_prog(screen, prog, "composite");
 
 
@@ -461,6 +473,8 @@ glamor_composite_set_blend_state(ScreenPtr screen,
                                  CARD8 op,
                                  glamor_composite_state* state)
 {
+    glamor_screen_private *glamor_priv = glamor_get_screen_private(screen);
+
     GLenum src = GL_ONE;
     GLenum dst = GL_ZERO;
     Bool ret = TRUE;
@@ -542,6 +556,13 @@ glamor_composite_set_blend_state(ScreenPtr screen,
     // As we want to write source.rgba * mask.rgba, we have to use an additional color output.
     if (state->mask.mask_rgba && dst == GL_SRC_ALPHA) dst = GL_SRC1_COLOR;
     if (state->mask.mask_rgba && dst == GL_ONE_MINUS_SRC_ALPHA) dst = GL_ONE_MINUS_SRC1_COLOR;
+
+    // check for dual source blend. Without this extension, we can't speed this up in a non hacky way.
+    if (!glamor_priv->has_blend_extended && (
+        dst == GL_SRC1_COLOR || dst == GL_ONE_MINUS_SRC1_COLOR )) {
+        ErrorF("Fallback because of missing dual source blend. Please fix your driver.\n");
+        return FALSE;
+    }
 
     glBlendFunc(src, dst);
     glEnable(GL_BLEND);
